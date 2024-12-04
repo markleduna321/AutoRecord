@@ -1,0 +1,58 @@
+import time
+import subprocess
+from pynput import mouse, keyboard
+
+# Path to your OBS executable
+OBS_PATH = "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"
+
+# Time in seconds to wait before stopping recording if no activity
+TIMEOUT = 60
+
+# Initialize last activity timestamp
+last_activity_time = time.time()
+recording_process = None
+
+def start_recording():
+    global recording_process
+    if recording_process is None:
+        # Start OBS recording
+        recording_process = subprocess.Popen([OBS_PATH, "--startrecording", "--minimize-to-tray"])
+        print("Started recording")
+
+def stop_recording():
+    global recording_process
+    if recording_process:
+        # Terminate OBS process
+        recording_process.terminate()
+        recording_process = None
+        print("Stopped recording")
+
+def on_activity():
+    global last_activity_time
+    last_activity_time = time.time()
+    start_recording()
+
+def monitor_timeout():
+    while True:
+        if recording_process and time.time() - last_activity_time > TIMEOUT:
+            stop_recording()
+        time.sleep(1)
+
+# Listener for mouse activity
+def on_mouse_move(x, y):
+    on_activity()
+
+# Listener for keyboard activity
+def on_key_press(key):
+    on_activity()
+
+# Set up listeners
+mouse_listener = mouse.Listener(on_move=on_mouse_move)
+keyboard_listener = keyboard.Listener(on_press=on_key_press)
+
+# Start listeners
+mouse_listener.start()
+keyboard_listener.start()
+
+# Monitor timeout in the main loop
+monitor_timeout()
