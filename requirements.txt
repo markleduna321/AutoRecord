@@ -1,0 +1,4 @@
+keyboard
+pynput
+obs-websocket-py>=1.0
+boto3

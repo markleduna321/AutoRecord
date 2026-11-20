@@ -9,7 +9,8 @@ This project automates the process of starting and stopping an OBS (Open Broadca
 - **Start Recording on Activity**: Automatically starts recording in OBS when any keyboard or mouse activity is detected. 🖱️⌨️
 - **Stop Recording on Inactivity**: Stops the recording after 1 minute of inactivity. ⏳
 - **OBS WebSocket Integration**: Communicates with OBS using the `obs-websocket-py` library to control the recording. 🌐
-- **Background Monitoring**: Continuously monitors keyboard and mouse activity in the background using separate threads. 🔄
+- **Optional Cloudflare R2 Uploads**: Uploads completed recordings in the background while keeping the local files.
+- **Background Monitoring**: Continuously monitors keyboard and mouse activity. 🔄
 - **OBS Minimization**: Opens OBS minimized to the system tray. 💻
 
 ---
@@ -22,15 +23,15 @@ This project automates the process of starting and stopping an OBS (Open Broadca
 - Install the following Python packages:
   - `keyboard`: To detect keyboard activity ⌨️
   - `pynput`: To detect mouse activity 🖱️
-  - `obswebsocket`: To interact with OBS 🌐
-  - `subprocess`: To open OBS if it's not already running 💻
+  - `obs-websocket-py`: To interact with OBS 🌐
+  - `boto3`: To upload recordings to Cloudflare R2
 
 ### Install Dependencies 📦
 
 To install the required dependencies, run the following command:
 
 ```bash
-pip install keyboard pynput obswebsocket
+python -m pip install -r requirements.txt
 ```
 
 ---
@@ -44,13 +45,38 @@ pip install keyboard pynput obswebsocket
 3. Password Configuration 🔑
 - Replace the OBS_PASSWORD variable in the script with your actual OBS WebSocket password.
 
+### Optional: Cloudflare R2 uploads
+
+1. Create an R2 bucket and an [R2 API token](https://developers.cloudflare.com/r2/api/tokens/) with **Object Read & Write** access scoped to that bucket. Use its Access Key ID and Secret Access Key, not the Cloudflare dashboard API token itself.
+2. Set these environment variables before starting the script. In PowerShell, for the current session:
+
+   ```powershell
+   $env:R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
+   $env:R2_BUCKET_NAME = "<bucket-name>"
+   $env:R2_ACCESS_KEY_ID = Read-Host "R2 Access Key ID"
+   $secret = Read-Host "R2 Secret Access Key" -AsSecureString
+   $env:R2_SECRET_ACCESS_KEY = [System.Net.NetworkCredential]::new("", $secret).Password
+   Remove-Variable secret
+   ```
+
+   Use the jurisdiction-specific endpoint shown by Cloudflare if your bucket has a jurisdiction. Do not commit credentials or put them in the startup batch file.
+3. Run `python .\AutoRec.py` from that same PowerShell session. For startup use, configure the variables in your Windows user environment instead; a new session inherits them. Environment variables can be read by processes running as your user, so keep the account and credentials secure.
+
+All four variables must be set together. If none are set, R2 uploads are disabled and recordings remain local-only; partial configuration stops the script with an error.
+
+When OBS reports that a recording has stopped, each observed file is uploaded under `recordings/<unique-id>/<filename>`. Uploads run in the background, and local files are never deleted. If OBS splits a recording, the observed parts are uploaded after it stops; split-file events require OBS WebSocket 5.5 or later.
+
+The script must be connected to OBS when the recording stops. It does not scan for older recordings or recover uploads after a restart. Failed uploads are reported and the local files remain available for a manual retry. On Ctrl+C, the script waits for queued uploads, but it does not stop an active OBS recording. Stop the recording and wait for it to be queued before exiting.
+
+Upload messages and errors appear in the terminal. When using `pythonw`, they are instead written to `%LOCALAPPDATA%\AutoRecord.log` (with rotation). Check the log or R2 bucket to verify uploads, and keep the bucket private unless you intend to share recordings.
+
 ---
 
 ## How to Use 🚀
 
 **Run the Script 💻:**
 ```bash
-python activity_recording.py
+python AutoRec.py
 ```
 
 **OBS Behavior 🎥:**
@@ -70,8 +96,8 @@ If you'd like the script to run in the background automatically when you start y
 
 **1. Create a Batch File 📑**
 - Create a batch file (e.g., AutoRec.bat) with the following content:
-```bash
-start /B pythonw C:\IP-Wpage\AutoRec.py
+```bat
+start "" /B pythonw "C:\path\to\AutoRec.py"
 ```
 - Make sure to change the file path to the location where you saved the AutoRec.py script.
 
@@ -84,7 +110,7 @@ start /B pythonw C:\IP-Wpage\AutoRec.py
 
 ## Customization ⚙️
 
-- Inactivity Duration ⏰: You can adjust the inactivity threshold (currently set to 1 minute) in the monitor_inactivity() function by changing the if time.time() - last_activity_time > 60 condition.
+- Inactivity Duration ⏰: Change the `time.time() - last_activity_time > 60` condition in `main()` to adjust the threshold.
 - OBS Path 🖥️: If your OBS installation is in a different directory, change the path in the open_obs() function.
 
 ---

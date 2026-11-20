@@ -1,9 +1,15 @@
 import keyboard
 from pynput import mouse
-from obswebsocket import obsws, requests
+from obswebsocket import events, obsws, requests
+from contextlib import ExitStack
+import logging
+from logging.handlers import RotatingFileHandler
+import os
 import subprocess
+import sys
 import time
-import threading
+
+from r2_upload import create_r2_uploader
 
 # OBS WebSocket configuration
 OBS_HOST = "localhost"
@@ -23,8 +29,11 @@ def open_obs():
     time.sleep(5)  # Wait for OBS to fully open
 
 # Connect to OBS WebSocket
-def connect_obs():
+def connect_obs(uploader):
     ws = obsws(OBS_HOST, OBS_PORT, OBS_PASSWORD)
+    if uploader is not None:
+        ws.register(uploader.on_recording_state_changed, events.RecordStateChanged)
+        ws.register(uploader.on_recording_file_changed, events.RecordFileChanged)
     ws.connect()
     return ws
 
@@ -62,40 +71,25 @@ def on_mouse_activity(x, y, button=None, pressed=None):
     last_activity_time = time.time()
     activity_detected = True  # Activity detected, ready to start recording
 
-# Function to monitor inactivity and stop recording
-def monitor_inactivity(ws):
-    global last_activity_time, recording_active, waiting_for_activity_to_start, activity_detected
-    while True:
-        time.sleep(1)  # Check every second
-        if time.time() - last_activity_time > 60:  # 1 minute of inactivity
-            if recording_active:
-                print("Inactivity detected. Stopping recording.")
-                toggle_recording(ws)
-            else:
-                waiting_for_activity_to_start = True  # Ensure we're waiting for activity after stopping
-            last_activity_time = time.time()  # Reset the timer after checking
-
 # Main function to start OBS and handle activity detection
 def main():
     global recording_active, last_activity_time, waiting_for_activity_to_start, activity_detected
 
-    open_obs()
-    ws = connect_obs()
-
-    # Start recording when activity is first detected
-    print("Waiting for keyboard or mouse activity to start recording...")
-
-    # Start the inactivity monitoring in a separate thread
-    inactivity_thread = threading.Thread(target=monitor_inactivity, args=(ws,))
-    inactivity_thread.daemon = True
-    inactivity_thread.start()
-
-    # Set up listeners for keyboard and mouse activity
-    keyboard.hook(on_keyboard_activity)
-    mouse_listener = mouse.Listener(on_move=on_mouse_activity, on_click=on_mouse_activity)
-    mouse_listener.start()
+    uploader = create_r2_uploader()
+    ws = None
+    keyboard_hook = None
+    mouse_listener = None
 
     try:
+        open_obs()
+        ws = connect_obs(uploader)
+
+        print("Waiting for keyboard or mouse activity to start recording...")
+
+        keyboard_hook = keyboard.hook(on_keyboard_activity)
+        mouse_listener = mouse.Listener(on_move=on_mouse_activity, on_click=on_mouse_activity)
+        mouse_listener.start()
+
         while True:
             # If recording is not active and there's activity, start recording
             if not recording_active and waiting_for_activity_to_start and activity_detected:
@@ -113,7 +107,21 @@ def main():
     except KeyboardInterrupt:
         print("Exiting...")
     finally:
-        ws.disconnect()
+        with ExitStack() as cleanup:
+            if uploader is not None:
+                cleanup.callback(uploader.close)
+            if ws is not None:
+                cleanup.callback(ws.disconnect)
+            if keyboard_hook is not None:
+                cleanup.callback(keyboard.unhook, keyboard_hook)
+            if mouse_listener is not None:
+                cleanup.callback(mouse_listener.stop)
 
 if __name__ == "__main__":
+    if sys.stderr is None:
+        log_path = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AutoRecord.log")
+        handler = RotatingFileHandler(log_path, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8")
+    else:
+        handler = logging.StreamHandler()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=[handler])
     main()
